@@ -1,6 +1,7 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use futures_util::sink::{SinkExt};
 use futures_util::stream::{FusedStream, Stream, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
@@ -58,6 +59,26 @@ impl Stream for MessageStream {
             match message {
                 Message::Close(_) => return Poll::Ready(None),
                 Message::Text(text_message) => break text_message,
+                Message::Ping(ping_message) => {
+                    loop {
+                        match self.socket.poll_ready_unpin(cx) {
+                            Poll::Pending => {},
+                            Poll::Ready(Ok(())) => break,
+                            Poll::Ready(Err(error)) => return Poll::Ready(Some(Err(Error::from(error)))),
+                        }
+                    }
+                    match self.socket.start_send_unpin(Message::Pong(ping_message)) {
+                        Ok(()) => {},
+                        Err(error) => return Poll::Ready(Some(Err(Error::from(error)))),
+                    }
+                    loop {
+                        match self.socket.poll_flush_unpin(cx) {
+                            Poll::Pending => {},
+                            Poll::Ready(Ok(())) => break,
+                            Poll::Ready(Err(error)) => return Poll::Ready(Some(Err(Error::from(error)))),
+                        }
+                    }
+                },
                 _ => {}
             }
         };
