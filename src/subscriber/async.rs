@@ -68,3 +68,63 @@ impl Stream for MessageStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, connect_async};
+    use tungstenite::protocol::Message;
+
+    use super::MessageStream;
+    use crate::payload::ReceivedMessageType;
+
+    #[tokio::test]
+    async fn replies_to_ping_without_manual_pong_handling() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+
+            // Send a ping
+            socket
+                .send(Message::Ping(vec![1, 2, 3].into()))
+                .await
+                .unwrap();
+
+            // Wait that the client stream replies with a pong
+            match socket.next().await.unwrap().unwrap() {
+                Message::Pong(data) => assert_eq!(data.as_ref(), &[1, 2, 3]),
+                other => panic!("expected pong, got {other:?}"),
+            }
+
+            let payload = serde_json::json!({
+                "id": "message-id",
+                "time": 1,
+                "event": "message",
+                "topic": "topic",
+                "message": "hello",
+            });
+            socket
+                .send(Message::Text(payload.to_string().into()))
+                .await
+                .unwrap();
+        });
+
+        let (socket, _) = connect_async(format!("ws://{addr}")).await.unwrap();
+
+        let mut stream = MessageStream { socket };
+
+        // Wait for a payload
+        let payload = stream.next().await.unwrap().unwrap();
+
+        assert_eq!(payload.id, "message-id");
+        assert_eq!(payload.event, ReceivedMessageType::Message);
+        assert_eq!(payload.topic, "topic");
+        assert_eq!(payload.message.as_deref(), Some("hello"));
+
+        server.await.unwrap();
+    }
+}
