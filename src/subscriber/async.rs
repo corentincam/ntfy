@@ -43,11 +43,11 @@ impl Stream for MessageStream {
     type Item = Result<ReceivedPayload, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.socket.is_terminated() {
-            return Poll::Ready(None);
-        }
-
         let text_message = loop {
+            if self.socket.is_terminated() {
+                return Poll::Ready(None);
+            }
+
             let message = match self.socket.poll_next_unpin(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(Ok(message))) => message,
